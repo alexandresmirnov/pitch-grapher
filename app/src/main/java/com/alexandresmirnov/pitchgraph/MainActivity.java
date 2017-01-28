@@ -2,9 +2,9 @@ package com.alexandresmirnov.pitchgraph;
 
 import android.Manifest;
 import android.content.pm.PackageManager;
+import android.os.AsyncTask;
 import android.os.Bundle;
 import android.os.Handler;
-import android.os.Message;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
 import android.support.v7.app.AppCompatActivity;
@@ -31,12 +31,59 @@ import be.tarsos.dsp.pitch.PitchProcessor;
 
 public class MainActivity extends AppCompatActivity {
 
-    LineDataSet dataSet;
     double timestamp = 0;
     float pitch = 150;
 
+    LineDataSet dataSet;
+    LineData lineData;
+
     Thread t;
-    Thread audioDispatcher;
+    Thread audioDispatcherThread;
+
+    Handler handler;
+    Runnable updateChart;
+
+    AudioDispatcher audioDispatcher;
+
+    PitchProcessor pitchProcessor = new PitchProcessor(PitchProcessor.PitchEstimationAlgorithm.FFT_YIN, 22050, 1024,
+            new PitchDetectionHandler() {
+
+            @Override
+            public void handlePitch(PitchDetectionResult pitchDetectionResult, AudioEvent audioEvent) {
+
+                timestamp = audioEvent.getTimeStamp();
+                pitch = pitchDetectionResult.getPitch();
+
+                Log.d("entry", "" + timestamp + pitch);
+
+                float transformedPitch = (float) (Math.log(pitch) / Math.log(2));
+
+                new UpdateChartTask().execute(new Entry((float) timestamp, transformedPitch));
+
+            }
+        }
+    );
+
+    private class UpdateChartTask extends AsyncTask<Entry, Void, Entry> {
+        protected Entry doInBackground(Entry... entries) {
+            return entries[0];
+        }
+
+        protected void onPostExecute(Entry entry) {
+            LineChart chart = (LineChart) findViewById(R.id.chart);
+
+            Log.d("new entry", ""+entry);
+            dataSet.addEntry(entry);
+            //lineData.addDataSet(dataSet);
+            //Log.d("UpdateChartTask", "added entry");
+            chart.notifyDataSetChanged();
+            chart.invalidate();
+
+        }
+    }
+
+
+
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -45,7 +92,6 @@ public class MainActivity extends AppCompatActivity {
 
         requestRecordAudioPermission();
 
-        // in this example, a LineChart is initialized from xml
         LineChart chart = (LineChart) findViewById(R.id.chart);
 
         List<Entry> entries = new ArrayList<Entry>();
@@ -53,7 +99,7 @@ public class MainActivity extends AppCompatActivity {
         entries.add(new Entry(6, (float) (Math.log(150)/Math.log(2))));
 
         dataSet = new LineDataSet(entries, "Label");
-        LineData lineData = new LineData(dataSet);
+        lineData = new LineData(dataSet);
         chart.setData(lineData);
         //chart.setTouchEnabled(false);
         chart.setDrawBorders(false);
@@ -73,61 +119,29 @@ public class MainActivity extends AppCompatActivity {
         bottomAxis.setAxisMinimum(0);
         //chart.moveViewToX(5);
 
+        //startCapturingAudio();
+        setUpButtons();
+
+
+
+
+
         startCapturingAudio();
-
-        Handler h = new Handler(){
-            @Override
-            public void handleMessage(Message msg){
-                if(msg.what == 0){
-                    updateUI();
-                }else{
-                    showErrorDialog();
-                }
-            }
-        };
+    }
 
 
-        t = new Thread() {
+    protected void startCapturingAudio(){
 
-            LineChart chart = (LineChart) findViewById(R.id.chart);
+        audioDispatcher = AudioDispatcherFactory.fromDefaultMicrophone(22050,1024,0);
+        audioDispatcher.addAudioProcessor(pitchProcessor);
 
-            @Override
-            public void run() {
-                try {
-                    while (!isInterrupted()) {
-
-                        Log.d("interrupted", ""+ isAlive());
-
-                        Thread.sleep(10);
-
-                        double transformedPitch = Math.log(pitch) / Math.log(2);
-
-                        Log.d("entry", "" + timestamp + ", " + transformedPitch);
-                        dataSet.addEntry(new Entry((float) timestamp, (float) transformedPitch));
-                        //dataSet.addEntry(new Entry((float) timestamp, 7));
-                        chart.notifyDataSetChanged();
-                        chart.invalidate();
-
-                        XAxis bottomAxis = chart.getXAxis();
-                        if (timestamp > 5) {
-
-                            //bottomAxis.setAxisMinimum((float) timestamp - 5);
-                            bottomAxis.setAxisMaximum((float) timestamp);
-
-                            chart.moveViewToX((float) timestamp - 5);
-                        }
+        audioDispatcherThread = new Thread(audioDispatcher,"Audio Dispatcher");
+        audioDispatcherThread.start();
 
 
+    }
 
-                    }
-                } catch (InterruptedException e) {
-                    Log.d("thread", "interrupted");
-                }
-            }
-        };
-
-        t.start();
-
+    private void setUpButtons() {
 
         Button stop = (Button) findViewById(R.id.stop);
 
@@ -135,31 +149,55 @@ public class MainActivity extends AppCompatActivity {
         {
             public void onClick(View v)
             {
-                t.interrupt();
+                Log.d("buttons", "pressed stop button");
+                //audioDispatcher.removeAudioProcessor(pitchProcessor);
+                audioDispatcher.stop();
             }
         });
 
-        Button start = (Button) findViewById(R.id.stop);
+        Button start = (Button) findViewById(R.id.start);
 
         start.setOnClickListener(new View.OnClickListener()
         {
             public void onClick(View v)
             {
-                t.run();
+                Log.d("buttons", "pressed start button");
+                //audioDispatcher.start();
+                startCapturingAudio();
+                //audioDispatcher.addAudioProcessor(pitchProcessor);
+
             }
         });
 
-        Button clear = (Button) findViewById(R.id.stop);
+        Button clear = (Button) findViewById(R.id.clear);
 
         clear.setOnClickListener(new View.OnClickListener()
         {
             public void onClick(View v)
             {
+                Log.d("buttons", "pressed clear button");
                 LineChart chart = (LineChart) findViewById(R.id.chart);
 
+
+                /*
                 List<Entry> entries = new ArrayList<Entry>();
+                entries.add(new Entry(6, (float) (Math.log(150)/Math.log(2))));
 
                 dataSet = new LineDataSet(entries, "Label");
+                lineData = new LineData(dataSet);
+                chart.setData(lineData);
+                */
+
+                Log.d("oldDataSet", ""+dataSet);
+
+                List<Entry> entries = new ArrayList<Entry>();
+                entries.add(new Entry(6, (float) (Math.log(150)/Math.log(2))));
+
+                dataSet = new LineDataSet(entries, "Label");
+                lineData = new LineData(dataSet);
+                chart.setData(lineData);
+
+                Log.d("newDataSet", ""+dataSet);
 
                 XAxis bottomAxis = chart.getXAxis();
                 bottomAxis.setAxisMinimum(0);
@@ -169,55 +207,6 @@ public class MainActivity extends AppCompatActivity {
             }
         });
     }
-
-    protected void startCapturingAudio(){
-
-        AudioDispatcher dispatcher = AudioDispatcherFactory.fromDefaultMicrophone(22050,1024,0);
-        dispatcher.addAudioProcessor(new PitchProcessor(PitchProcessor.PitchEstimationAlgorithm.FFT_YIN, 22050, 1024,
-            new PitchDetectionHandler() {
-
-                @Override
-                public void handlePitch(PitchDetectionResult pitchDetectionResult, AudioEvent audioEvent) {
-
-                    final float pitchInHz = pitchDetectionResult.getPitch();
-                    final double audioEventTimeStamp = audioEvent.getTimeStamp();
-                    runOnUiThread(
-                        new Runnable() {
-
-
-
-                            LineChart chart = (LineChart) findViewById(R.id.chart);
-
-                            @Override
-                            public void run() {
-
-
-
-                                /*
-                                TextView timestampView = (TextView) findViewById(R.id.timestamp);
-                                TextView pitchView = (TextView) findViewById(R.id.pitch);
-                                timestampView.setText("" + audioEventTimeStamp);
-                                pitchView.setText("" + pitchInHz);
-                                */
-                                timestamp = audioEventTimeStamp;
-                                pitch = pitchInHz;
-
-
-
-
-                            }
-                        });
-
-                }
-            }));
-
-        audioDispatcher = new Thread(dispatcher,"Audio Dispatcher");
-        audioDispatcher.start();
-
-
-
-    }
-
 
     private void requestRecordAudioPermission() {
         //check API version, do nothing if API version < 23!
